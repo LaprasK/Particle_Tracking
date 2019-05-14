@@ -5,16 +5,33 @@ Spyder Editor
 This is a temporary script file.
 """
 
-import helpy
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from skimage.transform import resize
+import copy
 
 
+def rotate_data(file_name):
+    dataset = np.load(file_name).item()
+    new_dataset = copy.deepcopy(dataset)
+    for data, angle, cate in zip(dataset['training_x'], dataset['training_regress'], dataset['training_class']):
+        for k in range(1,4):
+            new_dataset['training_x'].append(np.rot90(data, k))
+            new_dataset['training_regress'].append((angle+ k*np.pi/2)%(2*np.pi))
+            new_dataset['training_class'].append(cate)
+    a, b = file_name.split('.')
+    a += '_rotate4'
+    savename = a + '.' + b
+    np.save(savename, new_dataset)
+    return
 
 
 class build_training_data:
+    """
+    training_dict: Based on previous training, continue build data
+    number_test: number of particles add to the training data
+    """
     def __init__(self, image_file, frame_data, training_dict = None, number_test = None,\
                  training_shape = 32, upscale_size = 4, start_particle = 0, \
                  image_size = 1000, save_name = "2inch_square_training_data.npy"):

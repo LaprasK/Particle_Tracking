@@ -64,8 +64,6 @@ def label_particles_convolve(im, kern, thresh=0.45, **extra_args):
 
     return labels, convolved, threshed
 
-
-
 class position_detection:
     
     def __init__(self, files, output, plot = False, kern=-2.5, ecc=0.9, min_area=40, max_area=180, convex = 0.15, image_size = 32, \
@@ -90,7 +88,7 @@ class position_detection:
         self.meta.update({k: v for k, v in self.size['center'].iteritems()})
         self.init_boundary()
         self.print_freq = len(self.filenames)//100 + 1
-        #self.init_cpu(threads)
+        self.init_cpu(threads)
         self.Segment = namedtuple('Segment', 'x y label ecc area o'.split())
         self.mean = mean
         self.std = std
@@ -133,14 +131,14 @@ class position_detection:
     
     def init_cpu(self, threads):
         self.threads = cpu_count() or threads
-        if self.threads > 1:
+        if False:
             print("Multiprocessing with {} threads".format(self.threads))
             p = Pool(self.threads)
             self.mapper = p.map
         else:
             self.mapper = map
         return
-        
+            
     def init_boundary(self):
         self.boundary = self.meta.get('boundary')
         if self.boundary is None or self.boundary == [0.0]*3:
@@ -149,7 +147,6 @@ class position_detection:
         helpy.save_meta(self.prefix, self.meta)
         self.x0, self.y0, self.R0 = self.boundary
         return
-
     
     def init_model(self):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -198,10 +195,11 @@ class position_detection:
     def find_particles(self, im, **kwargs):
         labels, convolved, threshed = label_particles_convolve(im, **kwargs)
         intensity = im if kwargs['kern'] > 0 else 1 - im
-        pts = self.filter_segments(labels, intensity= intensity, keep = False, **kwargs)
+        keep = self.plot
+        pts = self.filter_segments(labels, intensity= intensity, keep = keep, **kwargs)
         return pts, labels, convolved       
 
-    def extract_image(self, xys, image, image_size = 32):
+    def extract_image(self, xys, image, x0=0, y0 =0, R0 =0, image_size = 32):
         center = image_size //2
         pos = xys - [center, center]
         pos = pos.astype(int)
@@ -232,17 +230,19 @@ class position_detection:
             orients += orient            
         return np.array(cats, dtype=bool), np.array(orients)
     
-    def get_positions(self, filename):
-        print(filename)
+    def get_positions(self, tuple_input):
+        filename = tuple_input[1]
         self.snapshot_num = 0 
         filebase = os.path.splitext(os.path.basename(filename))[0]
         imbase = os.path.join(self.imdir, filebase)
         self.imprefix = imbase
         #prep image
         image = prep_image(filename)
-        self.snapshot_num = 0
         out = self.find_particles(image, **self.size['center'])
         segments = out[0]
+        if self.plot:
+            #self.plot_positions(*out, **self.size['center'])
+            segments = np.array(segments[0], dtype=np.float64)[segments[1]]
         nfound = len(segments)
         if nfound:
             centers = np.hstack([np.full((nfound, 1), self.id_number, 'f8'), segments])
@@ -265,15 +265,6 @@ class position_detection:
 
     
     def detection(self):
-        """
-        self.threads = cpu_count() 
-        if self.threads > 1:
-            print("Multiprocessing with {} threads".format(self.threads))
-            p = Pool(self.threads)
-            mapper = p.map
-        else:
-            mapper = map   
-        """
         self.points = np.empty((0,7))
         self.id_number = 0
         for start, end in self.batch_number:
@@ -281,7 +272,7 @@ class position_detection:
             points = np.empty((0, 7))
             inputs = np.empty((0, self.image_size, self.image_size))
             batch_file = self.filenames[start: end]
-            ret = self.map(unwrap_self_f, zip([self]*len(batch_file), batch_file))
+            ret = self.mapper(self.get_positions, enumerate(batch_file))
             for input_image, center in ret:
                 inputs = np.concatenate((inputs, input_image))
                 points = np.vstack((points, center))
@@ -294,7 +285,7 @@ class position_detection:
             
         if self.plot:
             self.count = 0
-            plot_number = min(self.total, 10)
+            plot_number = min(self.total, 8)
             plot_index = np.random.choice(self.total, plot_number, replace=False)
             plot_image = [self.filenames[idx] for idx in plot_index]
             for (file_name, plot_index) in zip(plot_image, plot_index):
