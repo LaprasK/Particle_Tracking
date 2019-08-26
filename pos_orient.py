@@ -42,6 +42,9 @@ if __name__ == '__main__':
 
     
 def prep_image(im_file, width = 2):
+    """
+    Given image filename, normalize it to 0 to 1
+    """
     im = plt.imread(im_file).astype(float)
     s = width * im.std()
     m = im.mean()
@@ -52,6 +55,9 @@ def prep_image(im_file, width = 2):
 
 
 def gdisk(width, inner = 0, outer = None):
+    """
+    Given the width, build a Gaussian Kernel for image convolution
+    """
     outer = outer or inner + 4 * width
     circ = skdisk(outer).astype(int)
     incirc = circ.nonzero()
@@ -69,6 +75,11 @@ def gdisk(width, inner = 0, outer = None):
 
 
 def label_particles_convolve(im, kern, thresh=0.45, **extra_args):
+    """
+    Given image and kenerl, use the kernel to convolve with the image, 
+    if value larger than threshold, make it 1, otherwise 0.
+    use 1 and 0 to build the center segments
+    """
     kernel = np.sign(kern)*gdisk(abs(kern)/4, abs(kern))
     convolved = ndimage.convolve(im, kernel)
     convolved -= convolved.min()
@@ -101,8 +112,8 @@ def filter_segments(labels, max_ecc, min_area, max_area, convex=0.2, circ=None, 
         good = (good &(ecc <= max_ecc))
         if not (good or keep):
             continue
-        convex = rprop['convex_area']
-        ratio = (convex - area)/float(area)
+        convex_area = rprop['convex_area']
+        ratio = (convex_area - area)/float(area)
         good &= (ratio < convex)
         if not (good or keep):
             continue
@@ -125,11 +136,13 @@ def find_particles(im, keep = False, **kwargs):
 def net_orientation(input_images, net_cat = None, net = None, device = 'cuda:0'):
     total_image = len(input_images)
     input_images = np.expand_dims(input_images, axis= 1)
-    if total_image % 100 != 1:
+    if total_image % 100 > 3:
         my_batch = 100
-    else:
+    elif total_image % 101 > 3:
         my_batch = 101
-    print(total_image % my_batch)
+    else:
+        my_batch = 102
+    #print(total_image % my_batch)
     batches = [(start, start + my_batch) for start in range(0, total_image, my_batch)]
     cats, orients = list(), list()
     for start, end in batches:
@@ -290,12 +303,27 @@ if __name__ == '__main__':
         pos = np.round(pos).astype(int)
         result = list()
         #require particle start point larger than 0 and smaller 1024 - 32 
-        m1 = (pos[:,0] > 0) & (pos[:,1] > 0) & (pos[:,0] < 1024 - image_size) & (pos[:,1] < 1024 - image_size)
+        #m1 = (pos[:,0] > 0) & (pos[:,1] > 0) & (pos[:,0] < 1024 - image_size) & (pos[:,1] < 1024 - image_size)
         m2 = (np.hypot(*(xys - [x0, y0]).T) < R0)
-        mask = m1 & m2
+        mask = m2 #m1 & m2
         for x, y in pos[mask]:
-            
-            result.append(image[x: x+image_size, y:y+image_size])
+            if x + image_size >= 1024:
+                diff = x + image_size - 1024
+                pads = np.pad(image[x:1024, y:y+image_size], ((0,diff),(0,0)), 'edge')
+            elif y + image_size >= 1024:
+                diff = y + image_size - 1024
+                pads = np.pad(image[x:x+image_size, y:1024], ((0,0),(0,diff)), 'edge')
+            elif x < 0:
+                diff = -x
+                pads = np.pad(image[0:x+image_size, y:y+image_size],((diff,0),(0,0)),'edge')
+            elif y < 0: 
+                diff = -y
+                pads = np.pad(image[x:x+image_size,0:y+image_size],((0,0),(diff,0)),'edge')
+            else:
+                pads = image[x: x+image_size, y:y+image_size]
+                diff = 0
+            result.append(pads)
+            #print(diff)
             #mask.append(True)
         return (np.array(result) - args.mean)/args.std, np.array(mask) 
     
@@ -349,9 +377,15 @@ if __name__ == '__main__':
         points = points[cat]    
         points[:,-1] = np.deg2rad(orient)
         ret_points = np.vstack((ret_points, points))
-        finded = np.sum(points[:,0] == start)
-        print("Find {} particles in {}".format(colored(finded, 'blue' if finded >= args.ncen else 'red'),\
-              args.files[start]))
+        if total <= 100:
+            for image_index in range(start, min(total, end)):
+                finded = np.sum(points[:,0] == image_index)
+                print("Find {} particles in {}".format(colored(finded, 'blue' if finded >= args.ncen else 'red'),\
+                      args.files[image_index]))
+        else:   
+            finded = np.sum(points[:,0] == start)
+            print("Find {} particles in {}".format(colored(finded, 'blue' if finded >= args.ncen else 'red'),\
+                  args.files[start]))
         
     if args.plot:
         count = 0
@@ -374,6 +408,8 @@ if __name__ == '__main__':
        
     
     if args.save:
+        from shutil import copy
+        copy(first, prefix+'_'+os.path.basename(first))
         savenotice = "Saving {} positions to {}{{{},.npz}}".format
         hfmt = ('Kern {kern:.2f}, Min area {min_area:d}, '
                 'Max area {max_area:d}, Max eccen {max_ecc:.2f}\n'
